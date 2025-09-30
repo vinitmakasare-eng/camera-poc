@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Camera POC</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin:0; padding:16px; display:flex; flex-direction:column; align-items:center; gap:12px; }
+    h1 { font-size:1.1rem; margin:0; }
+    #video, #preview { width: 100%; max-width:420px; border-radius:10px; background:#111; }
+    #controls { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+    button { padding:10px 14px; border-radius:8px; border:none; background:#0b76ef; color:#fff; font-weight:600; }
+    button[disabled] { opacity:.5; }
+    #preview { display:block; object-fit:contain; }
+    #hint { font-size:.9rem; color:#555; text-align:center; max-width:420px; }
+  </style>
+</head>
+<body>
+  <h1>Camera Capture POC</h1>
+
+  <video id="video" autoplay playsinline></video>
+  <img id="preview" alt="Captured preview" style="display:none;" />
+
+  <div id="controls">
+    <button id="capture" disabled>📸 Capture</button>
+    <button id="switch">🔄 Switch Camera</button>
+    <a id="download" download="photo.jpg" style="display:none;"><button id="downloadBtn">⬇️ Download</button></a>
+  </div>
+
+  <p id="hint">Allow camera access when prompted. For best quality, use the back camera on mobile.</p>
+
+  <script>
+    let stream = null;
+    let currentFacing = "environment"; // environment (back) or user (front)
+    const video = document.getElementById('video');
+    const captureBtn = document.getElementById('capture');
+    const switchBtn = document.getElementById('switch');
+    const previewImg = document.getElementById('preview');
+    const downloadLink = document.getElementById('download');
+
+    async function stopStream() {
+      if (!stream) return;
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+
+    async function initCamera(facing = "environment") {
+      try {
+        await stopStream();
+        // ask for high resolution if available
+        const constraints = {
+          video: {
+            facingMode: { ideal: facing },
+            width: { ideal: 3840 }, // request high resolution
+            height: { ideal: 2160 }
+          },
+          audio: false
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+
+        // enable capture button once we have a track and metadata loaded
+        video.onloadedmetadata = () => {
+          captureBtn.disabled = false;
+        };
+      } catch (err) {
+        alert('Camera error: ' + err.message);
+        captureBtn.disabled = true;
+      }
+    }
+
+    async function capturePhoto() {
+      if (!stream) return;
+      const track = stream.getVideoTracks()[0];
+
+      // Prefer ImageCapture.takePhoto (gives native jpeg blob if supported)
+      if ('ImageCapture' in window) {
+        try {
+          const imageCapture = new ImageCapture(track);
+          if (typeof imageCapture.takePhoto === 'function') {
+            const blob = await imageCapture.takePhoto();
+            showPreview(blob);
+            return;
+          }
+        } catch (e) {
+          // fallback to canvas approach
+          console.warn('ImageCapture.takePhoto failed, fallback to canvas', e);
+        }
+      }
+
+      // Fallback: draw video frame to canvas (works in all modern browsers)
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1920;
+      canvas.height = video.videoHeight || 1080;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // convert to blob (jpeg, high quality)
+      canvas.toBlob((blob) => {
+        if (!blob) return alert('Failed to capture image');
+        showPreview(blob);
+      }, 'image/jpeg', 0.95);
+    }
+
+    function showPreview(blob) {
+      const url = URL.createObjectURL(blob);
+      previewImg.src = url;
+      previewImg.style.display = 'block';
+      downloadLink.href = url;
+      downloadLink.download = `photo-${new Date().toISOString().replace(/[:.]/g,'-')}.jpg`;
+      downloadLink.style.display = 'inline-block';
+      // revoke object URL after user downloads or after some time
+      setTimeout(()=> URL.revokeObjectURL(url), 60_000);
+    }
+
+    switchBtn.addEventListener('click', async () => {
+      currentFacing = currentFacing === 'environment' ? 'user' : 'environment';
+      captureBtn.disabled = true;
+      previewImg.style.display = 'none';
+      downloadLink.style.display = 'none';
+      await initCamera(currentFacing);
+    });
+
+    captureBtn.addEventListener('click', capturePhoto);
+
+    // init on load
+    initCamera(currentFacing);
+
+    // clean up when page is hidden
+    window.addEventListener('pagehide', stopStream);
+    window.addEventListener('beforeunload', stopStream);
+  </script>
+</body>
+</html>
